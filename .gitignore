@@ -1,0 +1,6 @@
+.venv
+micro1\conexion_mqtt_micro_1\.venv
+micro2\conexion_mqtt_micro_2\.venv
+
+*.workspace
+*/Project Backups
