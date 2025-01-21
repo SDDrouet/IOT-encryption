@@ -3,7 +3,7 @@ import paho.mqtt.client as mqtt
 import threading
 
 # Configuración del puerto serial
-SERIAL_PORT = 'COM6'  # Cambia al puerto donde está conectado tu Arduino
+SERIAL_PORT = 'COM4'  # Cambia al puerto donde está conectado tu Arduino
 BAUDRATE = 9600
 serial_port = serial.Serial(SERIAL_PORT, baudrate=BAUDRATE, timeout=1)
 

@@ -3,7 +3,7 @@ import json
 import paho.mqtt.client as mqtt
 
 # Configuración del puerto serial
-serial_port = serial.Serial('COM5', baudrate=9600, timeout=1)
+serial_port = serial.Serial('COM2', baudrate=9600, timeout=1)
 
 # Configuración del broker MQTT
 mqtt_client = mqtt.Client(callback_api_version=2)

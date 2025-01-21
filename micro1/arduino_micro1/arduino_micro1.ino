@@ -8,7 +8,7 @@ int period = 1000; // Intervalo de 1 segundo
 
 // Variables para el cifrado Klein
 // Definir clave de ejemplo (usa una clave de 8 bytes)
-const uint8_t key8[8] = {0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCD, 0xEF};
+const uint8_t key8[8] = {0x12, 0x34, 0x56, 0x79, 0x90, 0xAB, 0xCD, 0xEF};
 
 uint8_t cipher[8];
 String encryptedMessage = "";
