@@ -3,7 +3,7 @@ import paho.mqtt.client as mqtt
 import threading
 
 # Configuración del puerto serial
-SERIAL_PORT = 'COM6'  # Cambia al puerto donde está conectado tu Arduino
+SERIAL_PORT = 'COM4'  # Cambia al puerto donde está conectado tu Arduino
 BAUDRATE = 9600
 serial_port = serial.Serial(SERIAL_PORT, baudrate=BAUDRATE, timeout=1)
 
@@ -11,24 +11,35 @@ serial_port = serial.Serial(SERIAL_PORT, baudrate=BAUDRATE, timeout=1)
 BROKER_ADDRESS = "localhost"
 BROKER_PORT = 1883
 TOPIC_RECEIVE = "topic/encriptacion"
+TOPIC_KEY = "topic/micro1/key"
 TOPIC_SEND = "topic/analisis"
 
 mqtt_client = mqtt.Client()
 
+
+
 # Callback cuando se recibe un mensaje en el tópico TOPIC_RECEIVE
 def on_message(client, userdata, msg):
     data = msg.payload.decode('utf-8')
-    print("***************************************");
+    if msg.topic == TOPIC_RECEIVE:
+        if serial_port.is_open:
+            serial_port.write((data + '\n').encode('utf-8'))
+    elif msg.topic == TOPIC_KEY:
+        print(f"Recibida la clave: {data}")
+        if serial_port.is_open:
+            serial_port.write((data + '\n').encode('utf-8'))
+
     # Enviar el mensaje al puerto serial
-    if serial_port.is_open:
-        serial_port.write((data + '\n').encode('utf-8'))
-        print(f"Enviado al puerto {SERIAL_PORT}:\n{data}")
 
 # Configuración inicial del cliente MQTT
 def setup_mqtt():
     mqtt_client.on_message = on_message
     mqtt_client.connect(BROKER_ADDRESS, BROKER_PORT)
-    mqtt_client.subscribe(TOPIC_RECEIVE)
+    mqtt_client.subscribe([
+        (TOPIC_RECEIVE, 0),  # Suscripción con QoS 0
+        (TOPIC_KEY, 0)       # Suscripción con QoS 0
+    ])
+
     print("Conexión establecida con el broker MQTT")
     print("Esperando mensajes en el tópico:", TOPIC_RECEIVE)
 
@@ -41,7 +52,11 @@ def serial_loop():
     try:
         while True:
             if serial_port.in_waiting > 0:
-                arduino_data = serial_port.readline().decode('utf-8').strip()
+                try:
+                    arduino_data = serial_port.readline().decode('utf-8').strip()
+                except UnicodeDecodeError:
+                    print("Error al decodificar el mensaje")
+                    continue                
                 print(f"Recibido del puerto {SERIAL_PORT}:\n{arduino_data}")
                 mqtt_client.publish(TOPIC_SEND, arduino_data)
     except KeyboardInterrupt:
