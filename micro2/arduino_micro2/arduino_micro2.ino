@@ -2,6 +2,9 @@
 #include <uECC.h>
 #include "klein64.h"
 
+#define uECC_OPTIMIZATION_LEVEL 3 // Nivel básico de optimización
+#define uECC_SQUARE_FUNC 1
+
 const uint8_t key8[8] = {0x12, 0x34, 0x56, 0x79, 0x90, 0xAB, 0xCD, 0xEF};  // La misma clave de cifrado
 
 uint8_t cipher[8];  // Bloque cifrado
@@ -9,10 +12,11 @@ String decryptedMessage = "";  // Mensaje descifrado
 
 // Variables para la generacion de clave y para compartirlas
 
-uint8_t privateKey2[21];  // Clave privada de Micro 1
-uint8_t publicKey1[40];   // Clave pública de Micro 1
-uint8_t publicKey2[40]; // Almacenará la clave pública del micro 2
-uint8_t sharedSecret[20];  // Clave compartida reducida a 8 bytes
+uint8_t privateKey2[21] = {0};  // Clave privada de Micro 1
+uint8_t publicKey1[40] = {0};   // Clave pública de Micro 1
+uint8_t publicKey2[40] = {0}; // Almacenará la clave pública del micro 2
+uint8_t sharedSecret[8] = {0};  // Clave compartida reducida a 8 bytes
+int nonce = 0;
 
 // Funciones para la generación de las claves
 // --------------------------------------------------------------------
@@ -26,7 +30,7 @@ static int RNG(uint8_t *dest, unsigned size) {
     for (unsigned i = 0; i < 8; ++i) {
       int init = analogRead(A0);
       //int count = 0;
-      int count = random(0, 256);
+      int count = random(0, 5);
       
       /*
       while (analogRead(A0) == init) {
@@ -49,23 +53,44 @@ static int RNG(uint8_t *dest, unsigned size) {
 
 // Función para generar claves iniciales
 void generateInitialKeys() {
-  const struct uECC_Curve_t * curve = uECC_secp160r1();
-  uECC_make_key(publicKey2, privateKey2, curve);         // Generar par de claves
+  const struct uECC_Curve_t *curve = uECC_secp160r1();
+  int isKeysOK = 0;
+  while (true) {
+    isKeysOK = uECC_make_key(publicKey2, privateKey2, curve);         // Generar par de claves
+
+    if (isKeysOK == 1) {
+      Serial.println("Claves generadas");
+      break;
+    } else {
+      Serial.println("Error: generando par de claves");
+    }
+  }
 }
+
+String getHexString(const uint8_t *data, size_t length) {
+  String result = "";
+  for (size_t i = 0; i < length; i++) {
+    if (data[i] < 0x10) {
+      result += "0"; // Asegurar que siempre tenga dos dígitos
+    }
+    result += String(data[i], HEX); // Convertir a HEX y concatenar
+    if (i < length - 1) {
+      result += " ";
+    }
+  }
+  return result;
+}
+
 
 // Funcion para enviar la clave publica al Micro 2
 String jsonPublicKey() {
   // Crear una cadena JSON con la clave pública
-  String publicKey2Str = "";
-  for (int i = 0; i < 40; i++) {
-    if (publicKey2[i] < 0x10) {
-      publicKey2Str += "0";  // Asegurar siempre dos dígitos
-    }
-    publicKey2Str += String(publicKey2[i], HEX);
-  }
+  String publicKey2Str = getHexString(publicKey2, sizeof(publicKey2));
+  nonce = 50;//random(0, 1000);
 
   // Crear un objeto JSON y enviarlo
   String jsonMessage = "{\"publicKey\": \"" + publicKey2Str +
+  "\", \"nonce\": \"" + nonce +
   "\", \"microName\": \"" + "micro2" +
   "\", \"typeMessage\": \"" + "KEYS" +
   "\"}";
@@ -73,93 +98,83 @@ String jsonPublicKey() {
   return jsonMessage;
 }
 
-bool waitForPublicKey1() {
-  // Comprobar si hay datos disponibles por el puerto serial
-  if (Serial.available()) {
-    String publicKey1Str = Serial.readStringUntil('\n'); // Leer hasta un salto de línea
-    publicKey1Str = publicKey1Str.substring(0, publicKey1Str.length());
-
-    Serial.println("key: " + publicKey1Str);
-    Serial.println("key len: " + publicKey1Str.length());
-    // Verificar que la longitud sea válida (40 bytes en formato hexadecimal -> 80 caracteres)
-    if (publicKey1Str.length() != 80) {
-      Serial.println("Error: La clave publica recibida no tiene el tamano esperado.");
-      Serial.println("key: " + publicKey1Str);
-      Serial.println("key: " + publicKey1Str);
-      Serial.println("key: " + publicKey1Str);
-      Serial.println("key: " + publicKey1Str);
-      Serial.println("key: " + publicKey1Str);
-      Serial.println("key: " + publicKey1Str);
-      Serial.println("key len: " + publicKey1Str.length());
-      Serial.println("key len: " + publicKey1Str.length());
-      Serial.println("key len: " + publicKey1Str.length());
-      Serial.println("key len: " + publicKey1Str.length());
-      Serial.println("key len: " + publicKey1Str.length());
-      Serial.println("key len: " + publicKey1Str.length());
-      Serial.println("key len: " + publicKey1Str.length());
-      Serial.println("key len: " + publicKey1Str.length());
-      Serial.println("key len: " + publicKey1Str.length());
-      return 0;
-    }
-
-    Serial.println("key okey: " + publicKey1Str);
-
-    // Convertir la cadena al arreglo uint8_t
-    for (int i = 0; i < 40; i++) {
-      String byteHex = publicKey1Str.substring(i * 2, i * 2 + 2); // Obtener cada par de caracteres
-      publicKey1[i] = strtol(byteHex.c_str(), NULL, 16);         // Convertir hex a uint8_t
-    }
-    return 1;
+String waitForPublicKey1() {
+  if (Serial.available() > 0) {
+    String publicKey1Str = Serial.readStringUntil('\n');
+    return publicKey1Str;
   }
-  return 0; // Retornar cadena vacía si no hay datos disponibles
+
+  return "";
+}
+
+void confirmSuccessKeyShared() {
+  while (true) {
+    if (Serial.available() > 0) {
+      String nonceMicro1 = Serial.readStringUntil('\n');
+      String nonceMicro2 = String(nonce - 1); 
+
+      if (nonceMicro1 == nonceMicro2) {
+        Serial.println("Sincronización exitosa, Listo para compartir datos");
+        break;
+      } else {
+        String message = "Nonce no valido: n1-" + nonceMicro1 + "-  n2-" + nonceMicro2 + "-";
+        Serial.println(message);
+      }
+    }
+  }
+}
+
+void convertPublicKey(String publicKey) {
+  for (int i = 0; i < 40; i++) {
+    String byteHex = publicKey.substring(i * 2, i * 2 + 2); // Obtener cada par de caracteres
+    publicKey1[i] = strtol(byteHex.c_str(), NULL, 16);         // Convertir hex a uint8_t
+  }
+  
 }
 
 // Función para enviar la clave pública a Micro 2
 void syncSharedKeys() {  
-  bool isPublicKeySet = 0;
-  String jsonKeyMessage = jsonPublicKey();
-
+  String publicKeyStr = "";
   Serial.println("Esperando por clave....");
   while (true) {
-    isPublicKeySet = waitForPublicKey1();
-    if (isPublicKeySet) {
-      Serial.println(jsonKeyMessage);
+    publicKeyStr = waitForPublicKey1();
+    if (publicKeyStr != "") {
+      convertPublicKey(publicKeyStr);
+      Serial.println("Public Key 1 obtenida");
       break;
     }
   }
-  Serial.println("Clave obtenida");
 }
 
 // Función para calcular la clave compartida
 void getSharedSecret() {
-  uint8_t fullSharedSecret[20];  // Clave compartida completa
   const struct uECC_Curve_t *curve = uECC_secp160r1();
 
-  // Calcular la clave compartida
-  if (uECC_shared_secret(publicKey1, privateKey2, fullSharedSecret, curve)) {
-    /*Serial.println("Clave compartida completa calculada:");
-    for (int i = 0; i < 20; i++) {
-      Serial.print(fullSharedSecret[i], HEX);
-      Serial.print(" ");
-    }
-    Serial.println();*/
+  Serial.println("privatekey2: " + getHexString(privateKey2, sizeof(privateKey2)));
+  Serial.println("publickey2: " + getHexString(publicKey2, sizeof(publicKey2)));
+  Serial.println("publicKey1: " + getHexString(publicKey1, sizeof(publicKey1)));
 
-    // Optimizar la selección de la clave final (tomar los mejores 8 bytes)
-    optimizeKeySelection(fullSharedSecret, sharedSecret);
 
-    /*Serial.println("Clave optimizada seleccionada:");
-    for (int i = 0; i < 8; i++) {
-      Serial.print(sharedSecret[i], HEX);
-      Serial.print(" ");
+  
+  uint8_t fullSharedSecret[20] = {0};  // Clave compartida completa
+  int isKeysOK = 0;
+  
+  while (isKeysOK == 0) {
+    //isKeysOK = uECC_shared_secret(publicKey1, privateKey2, fullSharedSecret, curve);
+
+    if (isKeysOK == 1) {
+      //Serial.println("privatekey2:" + getHexString(privateKey2, sizeof(privateKey2)));
+      //Serial.println("publickey2:" + getHexString(publicKey2, sizeof(publicKey2)));
+      //Serial.println("publicKey1:" + getHexString(publicKey1, sizeof(publicKey1)));
+      //optimizeKeySelection(fullSharedSecret, sharedSecret);
+    } else {
+      Serial.println("Error calculando clave compartida, volviendo a calcular");
     }
-    Serial.println();*/
-  } else {
-    Serial.println("Error calculando clave compartida");
   }
 }
 
 // Función para optimizar la selección de la clave final (basada en puntuación simple)
-void optimizeKeySelection(uint8_t key[32], uint8_t optimizedKey[8]) {
+void optimizeKeySelection(uint8_t key[20], uint8_t optimizedKey[8]) {
   uint8_t tempKey[8];
   int bestScore = -1;
 
@@ -179,6 +194,8 @@ void optimizeKeySelection(uint8_t key[32], uint8_t optimizedKey[8]) {
       }
     }
   }
+
+  Serial.println("Shared secret obtenido");
 }
 
 // Función de puntuación para evaluar la "calidad" de los bytes
@@ -194,15 +211,45 @@ int score(uint8_t key[8]) {
 
 void setup() {
   // Iniciar comunicación serial
-  Serial.begin(9600);
-
+  String jsonMessage = "";
+  Serial.begin(115200);
   uECC_set_rng(&RNG);
+
   generateInitialKeys();    // Generar las claves iniciales
-  syncSharedKeys();  // Enviar la clave pública al Micro 2 y obtener su clave
-  getSharedSecret();
+  syncSharedKeys();
+  Serial.println("privatekey2:" + getHexString(privateKey2, sizeof(privateKey2)));
+  Serial.println("publickey2:" + getHexString(publicKey2, sizeof(publicKey2)));
+  Serial.println("publicKey1:" + getHexString(publicKey1, sizeof(publicKey1)));
+  /*
+  Serial.println("privatekey2:" + getHexString(privateKey2, sizeof(privateKey2)));
+  Serial.println("publickey2:" + getHexString(publicKey2, sizeof(publicKey2)));
+  Serial.println("publicKey1:" + getHexString(publicKey1, sizeof(publicKey1)));
+  Serial.println("sharedSecret:" + getHexString(sharedSecret, sizeof(sharedSecret)));*/
+  //jsonMessage = jsonPublicKey();
+  //Serial.println(jsonMessage);
+  Serial.println("Fin de Setup");
 }
 
+void getSecret(uint8_t *fullSharedSecret, size_t fullSharedSecretSize) {
+  const struct uECC_Curve_t *curve = uECC_secp160r1();
+
+  int isKeysOK = uECC_shared_secret(publicKey1, privateKey2, fullSharedSecret, curve);
+
+  Serial.println("privatekey2:" + getHexString(privateKey2, sizeof(privateKey2)));
+  Serial.println("publickey2:" + getHexString(publicKey2, sizeof(publicKey2)));
+  Serial.println("publicKey1:" + getHexString(publicKey1, sizeof(publicKey1)));
+  Serial.println("fullSharedSecret:" + getHexString(fullSharedSecret, fullSharedSecretSize));
+}
+
+
 void loop() {
+  //getSharedSecret();
+  uint8_t fullSharedSecret[20]; // Suponiendo que este es el tamaño del secreto compartido
+  size_t fullSharedSecretSize = sizeof(fullSharedSecret); // Tamaño del arreglo
+
+  getSecret(fullSharedSecret, fullSharedSecretSize);
+
+
   // Comprobar si hay datos disponibles por el puerto serial
   if (Serial.available()) {
     String encryptedMessage = Serial.readStringUntil('\n');  // Leer el mensaje cifrado hasta un salto de línea
@@ -253,3 +300,8 @@ String decryptMessage(String encryptedMessage, const uint8_t key8[8]) {
 
   return message;  // Retornar el mensaje desencriptado
 }
+
+
+
+
+

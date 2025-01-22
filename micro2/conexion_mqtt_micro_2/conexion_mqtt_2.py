@@ -25,9 +25,11 @@ def on_message(client, userdata, msg):
         if serial_port.is_open:
             serial_port.write((data + '\n').encode('utf-8'))
     elif msg.topic == TOPIC_KEY:
-        print(f"Recibida la clave: {data}")
         if serial_port.is_open:
-            serial_port.write((data + '\n').encode('utf-8'))
+            print(f"Enviando clave al puerto {SERIAL_PORT}:\n{data}")
+            message = data + '\n';
+            serial_port.write(message.encode('utf-8'))
+            serial_port.flush()
 
     # Enviar el mensaje al puerto serial
 
@@ -57,7 +59,7 @@ def serial_loop():
                 except UnicodeDecodeError:
                     print("Error al decodificar el mensaje")
                     continue                
-                print(f"Recibido del puerto {SERIAL_PORT}:\n{arduino_data}")
+                print(f"{arduino_data}")
                 mqtt_client.publish(TOPIC_SEND, arduino_data)
     except KeyboardInterrupt:
         print("Cerrando programa...")
