@@ -2,306 +2,335 @@
 #include <uECC.h>
 #include "klein64.h"
 
-#define uECC_OPTIMIZATION_LEVEL 3 // Nivel básico de optimización
-#define uECC_SQUARE_FUNC 1
+// Constantes de configuración
+#define KEY_SIZE 8
+#define PRIVATE_KEY_SIZE 21
+#define PUBLIC_KEY_SIZE 40
+#define SHARED_SECRET_SIZE 20
+#define HEX_CHARS_PER_BYTE 2
+#define MAX_RETRIES 5
 
-const uint8_t key8[8] = {0x12, 0x34, 0x56, 0x79, 0x90, 0xAB, 0xCD, 0xEF};  // La misma clave de cifrado
-
-uint8_t cipher[8];  // Bloque cifrado
-String decryptedMessage = "";  // Mensaje descifrado
-
-// Variables para la generacion de clave y para compartirlas
-
-uint8_t privateKey2[21] = {0};  // Clave privada de Micro 1
-uint8_t publicKey1[40] = {0};   // Clave pública de Micro 1
-uint8_t publicKey2[40] = {0}; // Almacenará la clave pública del micro 2
-uint8_t sharedSecret[8] = {0};  // Clave compartida reducida a 8 bytes
-int nonce = 0;
-
-// Funciones para la generación de las claves
-// --------------------------------------------------------------------
-
-static int RNG(uint8_t *dest, unsigned size) {
-  // Use the least-significant bits from the ADC for an unconnected pin (or connected to a source of 
-  // random noise). This can take a long time to generate random data if the result of analogRead(0) 
-  // doesn't change very frequently.
-  while (size) {
-    uint8_t val = 0;
-    for (unsigned i = 0; i < 8; ++i) {
-      int init = analogRead(A0);
-      //int count = 0;
-      int count = random(0, 5);
-      
-      /*
-      while (analogRead(A0) == init) {
-        ++count;
-      }*/
-      
-      if (count == 0) {
-         val = (val << 1) | (init & 0x01);
-      } else {
-         val = (val << 1) | (count & 0x01);
-      }
+// Estructura para mantener el estado de las claves
+struct KeyState {
+    const uint8_t key8[KEY_SIZE];
+    uint8_t privateKey2[PRIVATE_KEY_SIZE];
+    uint8_t publicKey1[PUBLIC_KEY_SIZE];
+    uint8_t publicKey2[PUBLIC_KEY_SIZE];
+    uint8_t sharedSecret[KEY_SIZE];
+    uint16_t nonce;
+    bool keysVerified;
+    
+    KeyState() : key8{0x12, 0x34, 0x56, 0x79, 0x90, 0xAB, 0xCD, 0xEF}, 
+                nonce(0), keysVerified(false) {
+        memset(privateKey2, 0, PRIVATE_KEY_SIZE);
+        memset(publicKey1, 0, PUBLIC_KEY_SIZE);
+        memset(publicKey2, 0, PUBLIC_KEY_SIZE);
+        memset(sharedSecret, 0, KEY_SIZE);
     }
-    *dest = val;
-    ++dest;
-    --size;
-  }
-  // NOTE: it would be a good idea to hash the resulting random data using SHA-256 or similar.
-  return 1;
+};
+
+static KeyState keyState;
+static uint8_t cipher[8];
+static String encryptedMessage = "";
+
+// Funciones existentes sin cambios...
+
+// Función mejorada de RNG usando precompilación
+static int RNG(uint8_t *dest, unsigned size) {
+    while (size--) {
+        uint8_t val = 0;
+        for (uint8_t i = 0; i < 8; ++i) {
+            int init = analogRead(A0);
+            uint8_t count = random(0, 5);
+            val = (val << 1) | (count ? (count & 0x01) : (init & 0x01));
+        }
+        *dest++ = val;
+    }
+    return 1;
+}
+
+// Función helper para convertir bytes a hexadecimal
+static void byteToHexStr(const uint8_t byte, char* output) {
+    static const char hex[] = "0123456789ABCDEF";
+    output[0] = hex[byte >> 4];
+    output[1] = hex[byte & 0x0F];
+}
+
+// Función optimizada para convertir array de bytes a string hexadecimal
+String getHexString(const uint8_t *data, const size_t length) {
+    String result;
+    result.reserve(length * 3);  // Pre-reservar espacio (2 chars por byte + espacio)
+    
+    char hexBuffer[3] = {0};
+    for (size_t i = 0; i < length; i++) {
+        byteToHexStr(data[i], hexBuffer);
+        result += hexBuffer;
+        if (i < length - 1) result += ' ';
+    }
+    return result;
 }
 
 // Función para generar claves iniciales
-void generateInitialKeys() {
-  const struct uECC_Curve_t *curve = uECC_secp160r1();
-  int isKeysOK = 0;
-  while (true) {
-    isKeysOK = uECC_make_key(publicKey2, privateKey2, curve);         // Generar par de claves
-
-    if (isKeysOK == 1) {
-      Serial.println("Claves generadas");
-      break;
-    } else {
-      Serial.println("Error: generando par de claves");
+bool generateInitialKeys() {
+    const struct uECC_Curve_t *curve = uECC_secp160r1();
+    uint8_t attempts = 0;
+    const uint8_t MAX_ATTEMPTS = 5;
+    
+    while (attempts++ < MAX_ATTEMPTS) {
+        if (uECC_make_key(keyState.publicKey2, keyState.privateKey2, curve)) {
+            return true;
+        }
+        delay(10);  // Pequeña pausa entre intentos
     }
-  }
-}
-
-String getHexString(const uint8_t *data, size_t length) {
-  String result = "";
-  for (size_t i = 0; i < length; i++) {
-    if (data[i] < 0x10) {
-      result += "0"; // Asegurar que siempre tenga dos dígitos
-    }
-    result += String(data[i], HEX); // Convertir a HEX y concatenar
-    if (i < length - 1) {
-      result += " ";
-    }
-  }
-  return result;
-}
-
-
-// Funcion para enviar la clave publica al Micro 2
-String jsonPublicKey() {
-  // Crear una cadena JSON con la clave pública
-  String publicKey2Str = getHexString(publicKey2, sizeof(publicKey2));
-  nonce = 50;//random(0, 1000);
-
-  // Crear un objeto JSON y enviarlo
-  String jsonMessage = "{\"publicKey\": \"" + publicKey2Str +
-  "\", \"nonce\": \"" + nonce +
-  "\", \"microName\": \"" + "micro2" +
-  "\", \"typeMessage\": \"" + "KEYS" +
-  "\"}";
-
-  return jsonMessage;
-}
-
-String waitForPublicKey1() {
-  if (Serial.available() > 0) {
-    String publicKey1Str = Serial.readStringUntil('\n');
-    return publicKey1Str;
-  }
-
-  return "";
-}
-
-void confirmSuccessKeyShared() {
-  while (true) {
-    if (Serial.available() > 0) {
-      String nonceMicro1 = Serial.readStringUntil('\n');
-      String nonceMicro2 = String(nonce - 1); 
-
-      if (nonceMicro1 == nonceMicro2) {
-        Serial.println("Sincronización exitosa, Listo para compartir datos");
-        break;
-      } else {
-        String message = "Nonce no valido: n1-" + nonceMicro1 + "-  n2-" + nonceMicro2 + "-";
-        Serial.println(message);
-      }
-    }
-  }
-}
-
-void convertPublicKey(String publicKey) {
-  for (int i = 0; i < 40; i++) {
-    String byteHex = publicKey.substring(i * 2, i * 2 + 2); // Obtener cada par de caracteres
-    publicKey1[i] = strtol(byteHex.c_str(), NULL, 16);         // Convertir hex a uint8_t
-  }
-  
-}
-
-// Función para enviar la clave pública a Micro 2
-void syncSharedKeys() {  
-  String publicKeyStr = "";
-  Serial.println("Esperando por clave....");
-  while (true) {
-    publicKeyStr = waitForPublicKey1();
-    if (publicKeyStr != "") {
-      convertPublicKey(publicKeyStr);
-      Serial.println("Public Key 1 obtenida");
-      break;
-    }
-  }
+    return false;
 }
 
 // Función para calcular la clave compartida
-void getSharedSecret() {
-  const struct uECC_Curve_t *curve = uECC_secp160r1();
+bool calculateSharedSecret(uint8_t *tempSecret) {
+    const struct uECC_Curve_t *curve = uECC_secp160r1();
+    return uECC_shared_secret(keyState.publicKey1, keyState.privateKey2, tempSecret, curve) == 1;
+}
 
-  Serial.println("privatekey2: " + getHexString(privateKey2, sizeof(privateKey2)));
-  Serial.println("publickey2: " + getHexString(publicKey2, sizeof(publicKey2)));
-  Serial.println("publicKey1: " + getHexString(publicKey1, sizeof(publicKey1)));
-
-
-  
-  uint8_t fullSharedSecret[20] = {0};  // Clave compartida completa
-  int isKeysOK = 0;
-  
-  while (isKeysOK == 0) {
-    //isKeysOK = uECC_shared_secret(publicKey1, privateKey2, fullSharedSecret, curve);
-
-    if (isKeysOK == 1) {
-      //Serial.println("privatekey2:" + getHexString(privateKey2, sizeof(privateKey2)));
-      //Serial.println("publickey2:" + getHexString(publicKey2, sizeof(publicKey2)));
-      //Serial.println("publicKey1:" + getHexString(publicKey1, sizeof(publicKey1)));
-      //optimizeKeySelection(fullSharedSecret, sharedSecret);
-    } else {
-      Serial.println("Error calculando clave compartida, volviendo a calcular");
+// Función optimizada para seleccionar la mejor clave
+void optimizeKeySelection(const uint8_t *fullSecret, uint8_t *optimizedKey) {
+    uint32_t bestScore = 0;
+    uint8_t bestIndex = 0;
+    
+    // Evaluar cada posible posición de inicio
+    for (uint8_t i = 0; i <= SHARED_SECRET_SIZE - KEY_SIZE; i++) {
+        uint32_t score = 0;
+        for (uint8_t j = 0; j < KEY_SIZE; j++) {
+            score += fullSecret[i + j];
+        }
+        
+        if (score > bestScore) {
+            bestScore = score;
+            bestIndex = i;
+        }
     }
-  }
+    
+    // Copiar los mejores 8 bytes
+    memcpy(optimizedKey, &fullSecret[bestIndex], KEY_SIZE);
 }
 
-// Función para optimizar la selección de la clave final (basada en puntuación simple)
-void optimizeKeySelection(uint8_t key[20], uint8_t optimizedKey[8]) {
-  uint8_t tempKey[8];
-  int bestScore = -1;
-
-  // Probar diferentes combinaciones para la selección de los 8 bytes
-  for (int i = 0; i < 20; i++) {
-    for (int j = 0; j < 8; j++) {
-      // Generar una combinación tomando diferentes bloques de 32 bytes
-      for (int k = 0; k < 8; k++) {
-        tempKey[k] = key[(i + k) % 20];  // Ciclo a través de los bytes para obtener variabilidad
-      }
-
-      // Evaluar la puntuación
-      int tempScore = score(tempKey);
-      if (tempScore > bestScore) {
-        bestScore = tempScore;
-        memcpy(optimizedKey, tempKey, 8); // Guardar la mejor clave
-      }
+// Función optimizada para convertir string hex a bytes
+void hexStringToBytes(const String &hexString, uint8_t *output, size_t outputSize) {
+    Serial.println("keystr: " + hexString);
+    size_t hexLength = hexString.length();
+    size_t bytesToProcess = outputSize;
+    
+    for (size_t i = 0; i < bytesToProcess; i++) {
+        char highNibble = hexString[i * 2];
+        char lowNibble = hexString[i * 2 + 1];
+        
+        highNibble = (highNibble <= '9') ? highNibble - '0' : (highNibble & 0x7) + 9;
+        lowNibble = (lowNibble <= '9') ? lowNibble - '0' : (lowNibble & 0x7) + 9;
+        
+        output[i] = (highNibble << 4) | lowNibble;
     }
-  }
-
-  Serial.println("Shared secret obtenido");
 }
 
-// Función de puntuación para evaluar la "calidad" de los bytes
-int score(uint8_t key[8]) {
-  int score = 0;
-  for (int i = 0; i < 8; i++) {
-    score += key[i] % 16;  // Añadir un criterio sencillo basado en el valor
-  }
-  return score;
+// Función para imprimir todas las claves (debug)
+void printAllKeys(const uint8_t *tempSecret) {
+    Serial.println(F("\n-------- DEBUG: KEYS STATUS --------"));
+    Serial.print(F("Private Key 2: "));
+    Serial.println(getHexString(keyState.privateKey2, PRIVATE_KEY_SIZE));
+    
+    Serial.print(F("Public Key 2: "));
+    Serial.println(getHexString(keyState.publicKey2, PUBLIC_KEY_SIZE));
+    
+    Serial.print(F("Public Key 1 (received): "));
+    Serial.println(getHexString(keyState.publicKey1, PUBLIC_KEY_SIZE));
+    
+    if (tempSecret != nullptr) {
+        Serial.print(F("Full Shared Secret: "));
+        Serial.println(getHexString(tempSecret, SHARED_SECRET_SIZE));
+    }
+    
+    Serial.print(F("Optimized Shared Secret: "));
+    Serial.println(getHexString(keyState.sharedSecret, KEY_SIZE));
+    Serial.println(F("----------------------------------\n"));
 }
 
-// --------------------------------------------------------------------
+
+// Función optimizada para descifrar mensajes
+String decryptMessage(const String &encryptedMessage) {
+    String result;
+    size_t messageLength = encryptedMessage.length();
+    
+    if (messageLength % 16 != 0) return result;  // Validación rápida
+    
+    result.reserve(messageLength / 2);  // Pre-reservar espacio
+    uint8_t block[8] = {0};
+    uint8_t decrypted[8] = {0};
+    
+    for (size_t i = 0; i < messageLength; i += 16) {
+        // Convertir 16 caracteres hex a 8 bytes
+        for (size_t j = 0; j < 8; j++) {
+            char highNibble = encryptedMessage[i + j * 2];
+            char lowNibble = encryptedMessage[i + j * 2 + 1];
+            
+            highNibble = (highNibble <= '9') ? highNibble - '0' : (highNibble & 0x7) + 9;
+            lowNibble = (lowNibble <= '9') ? lowNibble - '0' : (lowNibble & 0x7) + 9;
+            
+            block[j] = (highNibble << 4) | lowNibble;
+        }
+        
+        klein64_decrypt(block, keyState.key8, decrypted);
+        
+        for (uint8_t k = 0; k < 8; k++) {
+            if (decrypted[k]) result += (char)decrypted[k];
+        }
+    }
+    
+    return result;
+}
+
+// Nueva función para encriptar mensajes usando Klein
+void encryptMessage(const String &message, const uint8_t *key) {
+    int messageLength = message.length();
+    encryptedMessage = "";
+    
+    for (int i = 0; i < messageLength; i += 8) {
+        uint8_t block[8] = {0};
+        
+        // Copiar los bytes del mensaje al bloque
+        for (int j = 0; j < 8 && (i + j) < messageLength; j++) {
+            block[j] = (uint8_t)message[i + j];
+        }
+
+        // Cifrar el bloque
+        klein64_encrypt(block, key, cipher);
+
+        // Convertir a hexadecimal
+        for (int k = 0; k < 8; k++) {
+            if (cipher[k] < 0x10) {
+                encryptedMessage += "0";
+            }
+            encryptedMessage += String(cipher[k], HEX);
+            if (k < 7) encryptedMessage += " ";
+        }
+    }
+}
+
+// Nueva función para enviar el nonce encriptado
+void sendEncryptedNonce() {
+    // Generar nonce aleatorio
+    keyState.nonce = random(1000, 9999);
+    
+    // Convertir nonce a string
+    String nonceStr = String(keyState.nonce);
+
+    // Encriptar el nonce usando el secreto compartido
+    encryptMessage(nonceStr, keyState.sharedSecret);
+
+    // Obtener la clave pública en formato hexadecimal
+    String publicKeyLocal = getHexString(keyState.publicKey2, PUBLIC_KEY_SIZE);
+
+    // Crear una copia de la clave pública
+    String publicKeyLocalCopy = publicKeyLocal;
+
+    Serial.print(F("{\"publicKey\": \"" ));
+    Serial.print(publicKeyLocalCopy);
+    Serial.print(F("\", \"encryptedNonce\": \""));
+    Serial.print(encryptedMessage);
+    Serial.println(F("\", \"microName\": \"micro2\", \"typeMessage\": \"VERIFY\"}"));
+}
+
+
+// Nueva función para verificar la respuesta del nonce
+bool verifyNonceResponse(const String &response) {
+    // Desencriptar la respuesta usando el secreto compartido
+    String decrypted = decryptMessage(response);
+    
+    // Verificar si el nonce recibido es igual al nonce original - 1
+    int receivedNonce = decrypted.toInt();
+    return (receivedNonce == (keyState.nonce - 1));
+}
+
+bool performKeyVerification() {
+    uint8_t attempts = 0;
+    bool verified = false;
+    
+    while (attempts++ < MAX_RETRIES && !verified) {
+        // Enviar nonce encriptado
+        sendEncryptedNonce();
+        
+        // Esperar respuesta
+        unsigned long timeout = millis() + 5000;  // 5 segundos de timeout
+        Serial.println(F("waiting response..."));
+        while (millis() < timeout && !Serial.available()) {
+            delay(10);
+        }
+        
+        if (Serial.available()) {
+            String response = Serial.readStringUntil('\n');
+            verified = verifyNonceResponse(response);
+            
+            if (verified) {
+                Serial.println(F("Key verification successful!"));
+                keyState.keysVerified = true;
+                return true;
+            } else {
+                Serial.println(F("Verification failed, regenerating shared secret..."));
+                // Recalcular secreto compartido
+                uint8_t tempSecret[SHARED_SECRET_SIZE];
+                if (calculateSharedSecret(tempSecret)) {
+                    optimizeKeySelection(tempSecret, keyState.sharedSecret);
+                }
+            }
+        }
+    }
+    
+    Serial.println(F("Key verification failed after maximum attempts"));
+    return false;
+}
 
 void setup() {
-  // Iniciar comunicación serial
-  String jsonMessage = "";
-  Serial.begin(115200);
-  uECC_set_rng(&RNG);
-
-  generateInitialKeys();    // Generar las claves iniciales
-  syncSharedKeys();
-  Serial.println("privatekey2:" + getHexString(privateKey2, sizeof(privateKey2)));
-  Serial.println("publickey2:" + getHexString(publicKey2, sizeof(publicKey2)));
-  Serial.println("publicKey1:" + getHexString(publicKey1, sizeof(publicKey1)));
-  /*
-  Serial.println("privatekey2:" + getHexString(privateKey2, sizeof(privateKey2)));
-  Serial.println("publickey2:" + getHexString(publicKey2, sizeof(publicKey2)));
-  Serial.println("publicKey1:" + getHexString(publicKey1, sizeof(publicKey1)));
-  Serial.println("sharedSecret:" + getHexString(sharedSecret, sizeof(sharedSecret)));*/
-  //jsonMessage = jsonPublicKey();
-  //Serial.println(jsonMessage);
-  Serial.println("Fin de Setup");
+    Serial.begin(115200);
+    uECC_set_rng(&RNG);
+    randomSeed(analogRead(A0));
+    
+    Serial.println(F("\nInitializing key generation..."));
+    
+    // Generar claves iniciales
+    if (!generateInitialKeys()) {
+        Serial.println(F("Error: Failed to generate keys"));
+        return;
+    }
+    
+    // Esperar y procesar la clave pública externa
+    Serial.println(F("Waiting for external public key..."));
+    while (!Serial.available()) delay(10);
+    String publicKeyStr = Serial.readStringUntil('\n');
+    hexStringToBytes(publicKeyStr, keyState.publicKey1, PUBLIC_KEY_SIZE);
+    
+    // Calcular secreto compartido y verificar
+    uint8_t tempSecret[SHARED_SECRET_SIZE];
+    if (calculateSharedSecret(tempSecret)) {
+        optimizeKeySelection(tempSecret, keyState.sharedSecret);
+        printAllKeys(tempSecret);
+        
+        // Realizar verificación de claves
+        if (!performKeyVerification()) {
+            Serial.println(F("Failed to establish secure connection"));
+            return;
+        }
+    } else {
+        Serial.println(F("Error: Failed to calculate shared secret"));
+        return;
+    }
 }
-
-void getSecret(uint8_t *fullSharedSecret, size_t fullSharedSecretSize) {
-  const struct uECC_Curve_t *curve = uECC_secp160r1();
-
-  int isKeysOK = uECC_shared_secret(publicKey1, privateKey2, fullSharedSecret, curve);
-
-  Serial.println("privatekey2:" + getHexString(privateKey2, sizeof(privateKey2)));
-  Serial.println("publickey2:" + getHexString(publicKey2, sizeof(publicKey2)));
-  Serial.println("publicKey1:" + getHexString(publicKey1, sizeof(publicKey1)));
-  Serial.println("fullSharedSecret:" + getHexString(fullSharedSecret, fullSharedSecretSize));
-}
-
 
 void loop() {
-  //getSharedSecret();
-  uint8_t fullSharedSecret[20]; // Suponiendo que este es el tamaño del secreto compartido
-  size_t fullSharedSecretSize = sizeof(fullSharedSecret); // Tamaño del arreglo
-
-  getSecret(fullSharedSecret, fullSharedSecretSize);
-
-
-  // Comprobar si hay datos disponibles por el puerto serial
-  if (Serial.available()) {
-    String encryptedMessage = Serial.readStringUntil('\n');  // Leer el mensaje cifrado hasta un salto de línea
-    encryptedMessage = encryptedMessage.substring(0, encryptedMessage.length());
-    decryptedMessage = decryptMessage(encryptedMessage, key8);  // Desencriptar el mensaje
-
-    String jsonMessage = "{\"decryptedMessage\": \"" + decryptedMessage +
-    "\", \"microName\": \"" + "destination" +
-    "\"}";
-
-    // Mostrar el mensaje descifrado
-    Serial.println(jsonMessage);
-  }
-}
-
-String decryptMessage(String encryptedMessage, const uint8_t key8[8]) {
-  String message = "";
-
-  // Eliminar espacios si los hay
-  encryptedMessage.replace(" ", "");
-
-  // Verificar que la longitud del mensaje cifrado sea un múltiplo de 2
-  if (encryptedMessage.length() % 2 != 0) {
-    Serial.println("Error: El mensaje cifrado no tiene un tamaño múltiplo de 2 bytes.");
-    return "";
-  }
-
-  // Dividir el mensaje cifrado en bloques de 16 caracteres (8 bytes)
-  for (int i = 0; i < encryptedMessage.length(); i += 16) {  // 16 caracteres para 8 bytes
-    uint8_t block[8] = {0};
-
-    // Extraer 8 bloques de 2 caracteres hexadecimales cada uno
-    for (int j = 0; j < 8; j++) {
-      String byteHex = encryptedMessage.substring(i + j * 2, i + j * 2 + 2);  // Obtener cada byte en formato hex
-      block[j] = strtol(byteHex.c_str(), NULL, 16);  // Convertir el hex a byte
+    if (Serial.available() && keyState.keysVerified) {
+        String encryptedMessage = Serial.readStringUntil('\n');
+        String decrypted = decryptMessage(encryptedMessage);
+        
+        if (decrypted.length() > 0) {
+            Serial.print(F("{\"decryptedMessage\": \""));
+            Serial.print(decrypted);
+            Serial.println(F("\", \"microName\": \"destination\"}"));
+        }
     }
-
-    // Desencriptar el bloque
-    klein64_decrypt(block, key8, cipher);
-
-    // Reconstruir el mensaje original (convertir los bytes a caracteres)
-    for (int k = 0; k < 8; k++) {
-      if (cipher[k] != 0) {  // Solo agregar caracteres que no sean cero (espacios)
-        message += (char)cipher[k];
-      }
-    }
-  }
-
-  return message;  // Retornar el mensaje desencriptado
 }
-
-
-
-
-
