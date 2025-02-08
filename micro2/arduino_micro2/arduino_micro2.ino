@@ -86,37 +86,53 @@ bool generateInitialKeys() {
     return false;
 }
 
-// Función optimizada para seleccionar la mejor clave
-void optimizeKeySelection(uint8_t key[20], uint8_t optimizedKey[8]) {
-  uint8_t tempKey[8];
-  int bestScore = -1;
-
-  // Probar diferentes combinaciones para la selección de los 8 bytes
-  for (int i = 0; i < 20; i++) {
-    for (int j = 0; j < 8; j++) {
-      // Generar una combinación tomando diferentes bloques de 32 bytes
-      for (int k = 0; k < 8; k++) {
-        tempKey[k] = key[(i + k) % 20];  // Ciclo a través de los bytes para obtener variabilidad
-      }
-
-      // Evaluar la puntuación
-      int tempScore = score(tempKey);
-      if (tempScore > bestScore) {
-        bestScore = tempScore;
-        memcpy(optimizedKey, tempKey, 8); // Guardar la mejor clave
-      }
+// Función de puntuación basada en entropía y distribución
+int score(const uint8_t key[8]) {
+    int score = 0;
+    for (int i = 0; i < 8; i++) {
+        score += (key[i] * (i + 1)) % 256;  // Pondera posiciones
     }
-  }
+    return score;
 }
 
-// Función de puntuación para evaluar la "calidad" de los bytes
-int score(uint8_t key[8]) {
-  int score = 0;
-  for (int i = 0; i < 8; i++) {
-    score += key[i] % 16;  // Añadir un criterio sencillo basado en el valor
-  }
-  return score;
+// Función hash determinista basada en suma ponderada
+uint32_t simpleHash(const uint8_t key[20]) {
+    uint32_t hash = 0;
+    for (int i = 0; i < 20; i++) {
+        hash = (hash * 33) ^ key[i];  // Multiplicación y XOR para más entropía
+    }
+    return hash;
 }
+
+// Algoritmo heurístico de selección basado en IA
+void optimizeKeySelection(const uint8_t key[20], uint8_t optimizedKey[8]) {
+    uint8_t tempKey[8];
+    int bestScore = -1;
+
+    // Determinar índice inicial con base en un hash (simulación de IA)
+    uint32_t startIndex = simpleHash(key) % 20;
+
+    // Probar diferentes combinaciones usando una búsqueda heurística
+    for (int i = 0; i < 5; i++) {  // 5 intentos de selección "inteligente"
+        uint8_t tempKey[8];
+
+        // Selección heurística de 8 bytes no consecutivos
+        for (int j = 0; j < 8; j++) {
+            tempKey[j] = key[(startIndex + (j * 3)) % 20];  // Patrón distribuido
+        }
+
+        // Evaluar la calidad de la clave
+        int tempScore = score(tempKey);
+        if (tempScore > bestScore) {
+            bestScore = tempScore;
+            memcpy(optimizedKey, tempKey, 8);
+        }
+
+        // Cambiar punto de inicio con una mutación ligera (simulación de IA)
+        startIndex = (startIndex + 7) % 20;
+    }
+}
+
 
 // Función optimizada para convertir string hex a bytes
 void hexStringToBytes(const String &hexString, uint8_t *output, size_t outputSize) {

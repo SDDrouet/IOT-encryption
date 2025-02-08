@@ -35,7 +35,10 @@ static uint8_t cipher[8];
 static String encryptedMessage = "";
 
 long time_now;
-long period = 2000;
+long period = 200;
+
+unsigned long startTime;
+unsigned long finalTime;
 
 // Función mejorada de RNG usando precompilación
 static int RNG(uint8_t *dest, unsigned size) {
@@ -177,37 +180,53 @@ void sendEncryptedNonce(String encryptedNonce) {
     Serial.println(F("\", \"microName\": \"micro1\", \"typeMessage\": \"NONCE\"}"));
 }
 
-// Función optimizada para seleccionar la mejor clave
-void optimizeKeySelection(uint8_t key[20], uint8_t optimizedKey[8]) {
-  uint8_t tempKey[8];
-  int bestScore = -1;
-
-  // Probar diferentes combinaciones para la selección de los 8 bytes
-  for (int i = 0; i < 20; i++) {
-    for (int j = 0; j < 8; j++) {
-      // Generar una combinación tomando diferentes bloques de 32 bytes
-      for (int k = 0; k < 8; k++) {
-        tempKey[k] = key[(i + k) % 20];  // Ciclo a través de los bytes para obtener variabilidad
-      }
-
-      // Evaluar la puntuación
-      int tempScore = score(tempKey);
-      if (tempScore > bestScore) {
-        bestScore = tempScore;
-        memcpy(optimizedKey, tempKey, 8); // Guardar la mejor clave
-      }
+// Función de puntuación basada en entropía y distribución
+int score(const uint8_t key[8]) {
+    int score = 0;
+    for (int i = 0; i < 8; i++) {
+        score += (key[i] * (i + 1)) % 256;  // Pondera posiciones
     }
-  }
+    return score;
 }
 
-// Función de puntuación para evaluar la "calidad" de los bytes
-int score(uint8_t key[8]) {
-  int score = 0;
-  for (int i = 0; i < 8; i++) {
-    score += key[i] % 16;  // Añadir un criterio sencillo basado en el valor
-  }
-  return score;
+// Función hash determinista basada en suma ponderada
+uint32_t simpleHash(const uint8_t key[20]) {
+    uint32_t hash = 0;
+    for (int i = 0; i < 20; i++) {
+        hash = (hash * 33) ^ key[i];  // Multiplicación y XOR para más entropía
+    }
+    return hash;
 }
+
+// Algoritmo heurístico de selección basado en IA
+void optimizeKeySelection(const uint8_t key[20], uint8_t optimizedKey[8]) {
+    uint8_t tempKey[8];
+    int bestScore = -1;
+
+    // Determinar índice inicial con base en un hash (simulación de IA)
+    uint32_t startIndex = simpleHash(key) % 20;
+
+    // Probar diferentes combinaciones usando una búsqueda heurística
+    for (int i = 0; i < 5; i++) {  // 5 intentos de selección "inteligente"
+        uint8_t tempKey[8];
+
+        // Selección heurística de 8 bytes no consecutivos
+        for (int j = 0; j < 8; j++) {
+            tempKey[j] = key[(startIndex + (j * 3)) % 20];  // Patrón distribuido
+        }
+
+        // Evaluar la calidad de la clave
+        int tempScore = score(tempKey);
+        if (tempScore > bestScore) {
+            bestScore = tempScore;
+            memcpy(optimizedKey, tempKey, 8);
+        }
+
+        // Cambiar punto de inicio con una mutación ligera (simulación de IA)
+        startIndex = (startIndex + 7) % 20;
+    }
+}
+
 
 // Función para imprimir todas las claves (debug)
 void printAllKeys() {
@@ -286,6 +305,19 @@ void performKeyExchange() {
     }
 }
 
+void sendAnalytics(unsigned long time, String typeMessure, String unitMessure) {
+  // Crear mensaje JSON manualmente
+    String jsonMessage = "{";
+    jsonMessage += "\"time\": " + String(time) + ", ";
+    jsonMessage += "\"microName\": \"Microcontrolador 1\", ";
+    jsonMessage += "\"medition\": \"" + typeMessure + "\", ";
+    jsonMessage += "\"UnitMessure\": \"" + unitMessure + "\", ";
+    jsonMessage += "\"typeMessage\": \"ANALYTICS\"";
+    jsonMessage += "}";
+
+    // Enviar JSON
+    Serial.println(jsonMessage);
+}
 
 void setup() {
     Serial.begin(57600);
@@ -299,18 +331,18 @@ void setup() {
     }
 
     performKeyExchange();
-    time_now = millis();
 
     if (keyState.keysVerified) {
       Serial.println(F("Secure Communication: Ready"));
     } else {
       Serial.println(F("Error: Failed to establish secure connection"));
     }
+
+    time_now = millis();
 }
 
 void loop() {
-
-    // Enviar mensaje cada cierto tiempo
+  // Enviar mensaje cada cierto tiempo
   if (millis() >= time_now + period) {
     time_now += period;
 
@@ -318,13 +350,17 @@ void loop() {
     String message = "Dato micro1: " + dataValue;
 
     // Cifrar el mensaje
+    startTime = micros();
     encryptMessage(message, keyState.sharedSecret);
+    finalTime = micros() - startTime;
+    sendAnalytics(finalTime, "Encryption Time", "us");
 
     // Crear un objeto JSON y enviarlo
     String jsonMessage = "{\"encryptedMessage\": \"" + encryptedMessage +
     "\", \"microName\": \"" + "source" +
     "\", \"typeMessage\": \"" + "ENCRYPTED MESSAGE" +
     "\"}";
+
     Serial.println(jsonMessage);
   }
 }
