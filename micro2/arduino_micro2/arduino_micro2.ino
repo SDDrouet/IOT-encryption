@@ -36,6 +36,9 @@ static KeyState keyState;
 static uint8_t cipher[8];
 static String encryptedMessage = "";
 
+unsigned long startTime;
+unsigned long finalTime;
+
 // Funciones existentes sin cambios...
 
 // Función mejorada de RNG usando precompilación
@@ -334,12 +337,85 @@ bool performKeyVerification() {
     return false;
 }
 
+void sendAnalytics(unsigned long time, String typeMessure, String unitMessure) {
+  // Imprimir el mensaje JSON usando F() para optimizar memoria
+  Serial.print(F("{"));
+  Serial.print(F("\"time\": "));
+  Serial.print(time);
+  Serial.print(F(", "));
+  Serial.print(F("\"microName\": \"Microcontrolador 2\", "));
+  Serial.print(F("\"medition\": \""));
+  Serial.print(typeMessure);
+  Serial.print(F("\", "));
+  Serial.print(F("\"UnitMessure\": \""));
+  Serial.print(unitMessure);
+  Serial.print(F("\", "));
+  Serial.print(F("\"typeMessage\": \"ANALYTICS\""));
+  Serial.println(F("}"));
+}
+
+// Funcion de prueba para medir generacion de claves
+void calculateKeyTimeGeneration() {
+    const struct uECC_Curve_t *curve = uECC_secp160r1();
+    uint8_t private1[21] = {0};
+    uint8_t private2[21] = {0};
+
+    uint8_t public1[40] = {0};
+    uint8_t public2[40] = {0};
+
+    uint8_t secret1[20] = {0};
+    uint8_t secret2[20] = {0};
+
+    uint8_t secretKey1[8] = {0};
+    uint8_t secretKey2[8] = {0};
+
+    //Calculando clave publica y privada 1
+    startTime = millis();
+    uECC_make_key(public1, private1, curve);
+    finalTime = millis() - startTime;
+    sendAnalytics(finalTime, "Public Private Key Time", "ms");
+
+    //Calculando clave publica y privada 2
+    startTime = millis();
+    uECC_make_key(public2, private2, curve);
+    finalTime = millis() - startTime;
+    sendAnalytics(finalTime, "Public Private Key Time", "ms");
+
+    //Calculando clave compartida 1
+    startTime = millis();
+    uECC_shared_secret(public2, private1, secret1, curve);
+    finalTime = millis() - startTime;
+    sendAnalytics(finalTime, "UECC Shared Key Time", "ms");
+
+    //Calculando clave compartida 2
+    startTime = millis();
+    uECC_shared_secret(public2, private1, secret1, curve);
+    finalTime = millis() - startTime;
+    sendAnalytics(finalTime, "UECC Shared Key Time", "ms");
+
+    //Calculando clave compartida Optimizada
+    startTime = micros();
+    optimizeKeySelection(secret1, secretKey1);
+    finalTime = micros() - startTime;
+    sendAnalytics(finalTime, "Optimized Shared Key Time", "us");
+
+    //Calculando clave compartida Optimizada
+    startTime = micros();
+    optimizeKeySelection(secret2, secretKey2);
+    finalTime = micros() - startTime;
+    sendAnalytics(finalTime, "Optimized Shared Key Time", "us");
+}
+
+
 void setup() {
     Serial.begin(57600);
     uECC_set_rng(&RNG);
     randomSeed(analogRead(A0));
     
     Serial.println(F("\nInitializing key generation..."));
+
+    //Calcular tiempo de generacion de claves
+    //while(true) calculateKeyTimeGeneration();
     
     // Generar claves iniciales
     if (!generateInitialKeys()) {
@@ -373,7 +449,11 @@ void setup() {
 void loop() {
     if (Serial.available() && keyState.keysVerified) {
         String encryptedMessage = Serial.readStringUntil('\n');
+
+        startTime = micros();
         String decrypted = decryptMessage(encryptedMessage);
+        finalTime = micros() - startTime;
+        sendAnalytics(finalTime, "Decryption Time", "us");
         
         if (decrypted != "") {
             Serial.print(F("Mensaje: "));
