@@ -35,7 +35,7 @@ static uint8_t cipher[8];
 static String encryptedMessage = "";
 
 long time_now;
-long period = 200;
+long period = 10;
 
 unsigned long startTime;
 unsigned long finalTime;
@@ -335,40 +335,40 @@ void calculateKeyTimeGeneration() {
     uint8_t secretKey2[8] = {0};
 
     //Calculando clave publica y privada 1
-    startTime = millis();
+    startTime = micros();
     uECC_make_key(public1, private1, curve);
-    finalTime = millis() - startTime;
-    sendAnalytics(finalTime, "Public Private Key Time", "ms");
+    finalTime = (micros() - startTime) * (F_CPU / 1000000L);
+    sendAnalytics(finalTime, "Public Private Key Time", "cycles");
 
     //Calculando clave publica y privada 2
-    startTime = millis();
+    startTime = micros();
     uECC_make_key(public2, private2, curve);
-    finalTime = millis() - startTime;
-    sendAnalytics(finalTime, "Public Private Key Time", "ms");
+    finalTime = (micros() - startTime) * (F_CPU / 1000000L);
+    sendAnalytics(finalTime, "Public Private Key Time", "cycles");
 
     //Calculando clave compartida 1
-    startTime = millis();
+    startTime = micros();
     uECC_shared_secret(public2, private1, secret1, curve);
-    finalTime = millis() - startTime;
-    sendAnalytics(finalTime, "UECC Shared Key Time", "ms");
+    finalTime = (micros() - startTime) * (F_CPU / 1000000L);
+    sendAnalytics(finalTime, "UECC Shared Key Time", "cycles");
 
     //Calculando clave compartida 2
-    startTime = millis();
+    startTime = micros();
     uECC_shared_secret(public2, private1, secret1, curve);
-    finalTime = millis() - startTime;
-    sendAnalytics(finalTime, "UECC Shared Key Time", "ms");
+    finalTime = (micros() - startTime) * (F_CPU / 1000000L);
+    sendAnalytics(finalTime, "UECC Shared Key Time", "cycles");
 
     //Calculando clave compartida Optimizada
-    startTime = micros();
+    startTime = millis();
     optimizeKeySelection(secret1, secretKey1);
-    finalTime = micros() - startTime;
-    sendAnalytics(finalTime, "Optimized Shared Key Time", "us");
+    finalTime = (millis() - startTime) * (F_CPU / 1000L);
+    sendAnalytics(finalTime, "Optimized Shared Key Time", "cycles ms");
 
     //Calculando clave compartida Optimizada
-    startTime = micros();
+    startTime = millis();
     optimizeKeySelection(secret2, secretKey2);
-    finalTime = micros() - startTime;
-    sendAnalytics(finalTime, "Optimized Shared Key Time", "us");
+    finalTime = (millis() - startTime) * (F_CPU / 1000L);
+    sendAnalytics(finalTime, "Optimized Shared Key Time", "cycles ms");
 }
 
 void setup() {
@@ -379,7 +379,7 @@ void setup() {
     Serial.println(F("\nInitializing key generation..."));
 
     //Calcular tiempo de generacion de claves
-    //while(true) calculateKeyTimeGeneration();
+    while(true) calculateKeyTimeGeneration();
 
     if (!generateInitialKeys()) {
         Serial.println(F("Failed to generate keys"));
@@ -408,8 +408,8 @@ void loop() {
     // Cifrar el mensaje
     startTime = micros();
     encryptMessage(message, keyState.sharedSecret);
-    finalTime = micros() - startTime;
-    sendAnalytics(finalTime, "Encryption Time", "us");
+    finalTime = (micros() - startTime) * (F_CPU / 1000000L);
+    sendAnalytics(finalTime, "Encryption Time", "cycles");
 
     // Crear un objeto JSON y enviarlo
     String jsonMessage = "{\"encryptedMessage\": \"" + encryptedMessage +

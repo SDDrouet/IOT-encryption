@@ -3,7 +3,7 @@ from model import MeditionData
 
 MONGO_URI = "mongodb://localhost:27017"
 DATABASE_NAME = "sensores"
-COLLECTION_NAME = "mediciones"
+COLLECTION_NAME = "mediciones2"
 
 client = AsyncIOMotorClient(MONGO_URI)
 db = client[DATABASE_NAME]

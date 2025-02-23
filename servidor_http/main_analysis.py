@@ -7,9 +7,10 @@ import os
 def get_data():
     client = MongoClient("mongodb://localhost:27017")
     db = client["sensores"]
-    coll = db["mediciones"]
+    coll = db["mediciones2"]
     return list(coll.find())
 
+"""
 def convert_to_microseconds(time_val, unit):
     if unit.lower() == 'ms':
         return time_val * 1000
@@ -17,6 +18,7 @@ def convert_to_microseconds(time_val, unit):
         return time_val
     else:
         return time_val
+"""
 
 def main():
     data = get_data()
@@ -28,7 +30,7 @@ def main():
     for doc in data:
         t = doc.get("time")
         unit = doc.get("UnitMessure")
-        t_us = convert_to_microseconds(t, unit)
+        t_us = t
         doc["time_us"] = t_us
         processed.append(doc)
 
@@ -48,15 +50,6 @@ def main():
     microcontrollers = sorted(list(micro_set))
     medition_types = sorted(list(medition_set))
 
-    print("Métricas generales por Microcontrolador:")
-    metrics_micro = {}
-    for micro in microcontrollers:
-        times = grouped_micro[micro]
-        mean_val = np.mean(times)
-        std_val = np.std(times)
-        metrics_micro[micro] = (mean_val, std_val)
-        print(f"{micro}: Media = {mean_val:.2f} us, Desviación Estándar = {std_val:.2f} us")
-
     print("\nMétricas por Medición:")
     metrics_medition = {}
     for key, times in grouped_micro_medition.items():
@@ -64,7 +57,7 @@ def main():
         mean_val = np.mean(times)
         std_val = np.std(times)
         metrics_medition[key] = (mean_val, std_val)
-        print(f"{micro} - {medition}: Media = {mean_val:.2f} us, Desviación Estándar = {std_val:.2f} us")
+        print(f"{micro} - {medition}: Media = {mean_val:.2f} cycles, Desviación Estándar = {std_val:.2f} cycles")
 
     if not os.path.exists("measuresImages"):
         os.makedirs("measuresImages")
@@ -91,11 +84,11 @@ def main():
         
         ax.set_xticks(x)
         ax.set_xticklabels(medition_types_enc_dec, rotation=45, ha="right")
-        ax.set_ylabel("Tiempo (us)")
-        ax.set_title("Tiempos Promedio de Encriptación/Desencriptación")
+        ax.set_ylabel("# Cycles")
+        ax.set_title("Encryption/Decryption Number of Cycles")
         ax.legend()
         plt.tight_layout()
-        plt.savefig("measuresImages/enc_dec_avg_chart.png")
+        plt.savefig("measuresImages/enc_dec_avg_chart_cycles.png")
         plt.show()
 
     # Gráfico para métricas de claves
@@ -107,19 +100,26 @@ def main():
         x_key = np.arange(len(group_names))
         fig_key, ax_key = plt.subplots(figsize=(10, 6))
         bar_width_key = 0.8 / len(microcontrollers)
-        colors = {'UECC': '#1f77b4', 'Optimized': '#ff7f0e', 'Public': '#2ca02c'}
+        colors = {'UECC': '#7befd5', 'Optimized': '#ff7f0e', 'Public': '#2ca02c'}
         
         shared_means = {}
         public_means = {}
+        temp_public = {}
+        meanTime = 0;
+
+        for micro in microcontrollers:
+            temp_public = grouped_micro_medition.get((micro, 'Public Private Key Time'), [])
+            meanTime = np.mean(temp_public) if temp_public else 0 + meanTime;
+
         
         for micro in microcontrollers:
             uecc_times = grouped_micro_medition.get((micro, 'UECC Shared Key Time'), [])
             optimized_times = grouped_micro_medition.get((micro, 'Optimized Shared Key Time'), [])
-            public_times = grouped_micro_medition.get((micro, 'Public Private Key Time'), [])
             
-            shared_means[micro] = (np.mean(uecc_times) if uecc_times else 0,
-                                   np.mean(optimized_times) if optimized_times else 0)
-            public_means[micro] = np.mean(public_times) if public_times else 0
+            shared_means[micro] = ((np.mean(uecc_times) if uecc_times else 0),
+                                   (np.mean(optimized_times) if optimized_times else 0))
+            public_means[micro] = meanTime
+
         
         for i, micro in enumerate(microcontrollers):
             offset = (i - len(microcontrollers)/2) * bar_width_key + bar_width_key/2
@@ -128,7 +128,7 @@ def main():
             
             # Barras apiladas para Shared Key
             ax_key.bar(x_key[0] + offset, uecc_mean, bar_width_key, color=colors['UECC'], 
-                      label='UECC' if i == 0 else "")
+                      label='Shared' if i == 0 else "")
             ax_key.bar(x_key[0] + offset, optimized_mean, bar_width_key, 
                       bottom=uecc_mean, color=colors['Optimized'], label='Optimized' if i == 0 else "")
             
@@ -138,15 +138,19 @@ def main():
         
         ax_key.set_xticks(x_key)
         ax_key.set_xticklabels(group_names, rotation=45, ha="right")
-        ax_key.set_ylabel("Tiempo (us)")
-        ax_key.set_title("Tiempos de Operaciones con Claves por Microcontrolador")
+        ax_key.set_ylabel("T# Cycles")
+        ax_key.set_title("Keys Generation Number of Cycles")
+
+        # Evitar notación científica en el eje Y
+        ax_key.ticklabel_format(style='plain', axis='y')
         
         handles, labels = ax_key.get_legend_handles_labels()
         unique_labels = dict(zip(labels, handles))
-        ax_key.legend(unique_labels.values(), unique_labels.keys())
+        ax_key.legend(unique_labels.values(), unique_labels.keys(), loc='upper left', bbox_to_anchor=(1, 1))
+
         
         plt.tight_layout()
-        plt.savefig("measuresImages/key_operations_chart.png")
+        plt.savefig("measuresImages/key_operations_chart_cycles.png")
         plt.show()
 
 
